@@ -1,5 +1,4 @@
 # A STUN Client follow RFC 5389.
-
 import socket
 import struct
 import random
@@ -10,48 +9,53 @@ import zlib
 
 # 在这里定义STUN 属性的常量
 class STUNAttr:
+    MAPPED_ADDRESS = 0x0001
     USERNAME = 0x0006
     MESSAGE_INTEGRITY = 0x0008
+    XOR_MAPPED_ADDRESS = 0x0020
     PRIORITY = 0x0024
     FINGER_PRINT = 0x8028
     ICE_CONTROLLED = 0x8029
+    MAGIC_COOKIE = 0x2112A442
+
 
 class LENGTH:
     STUN_HEAD = 20
-    FINGER_PRINT = 8
+    FINGERPRINT = 8
 
-# 其他可用的公网STUN服务器stun.syncthing.net
+# 测试过的STUN服务器
+TESTED_STUN_SERVERS = ['stun.freeswitch.org', 'stun.graftlab.com', 'stun.miwifi.com', 'stun.kaseya.com']
+
 def get_stun_ip_port(stun_host, stun_port=3478, user_name=None, password=None, version=2) -> tuple[str, int] | tuple[None, None]:
-    '''
-    stun_host: STUN服务器地址，测试过的stun服务器有：
-        stun.freeswitch.org 
-        stun.graftlab.com 
-        stun.miwifi.com 
-    '''
-
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2)
+    sock.settimeout(3)
 
     transaction_id = generate_transaction_id()
 
     if version == 2:
-        msg = build_stun_request_v2(transaction_id, user_name, password)
+        msg = build_stun_request(transaction_id, user_name, password)
     else:
-        msg = build_stun_request(transaction_id)
+        msg = build_stun_request_basic(transaction_id)
 
     try:
         sock.sendto(msg, (stun_host, stun_port))
 
         data, addr = sock.recvfrom(1024)
+        public_address, public_port = parse_stun_response(data, transaction_id)
+        # 如果解析失败
+        if public_address is None or public_port is None:
+            print("Failed to parse STUN response.")
+            return None, None
+
+        return public_address, public_port
     except socket.timeout:
         print("Error: receive STUN response time out.")
-        return None, None
+    except Exception as e:
+        print("Error: ", e)
+    finally:
+        sock.close()
 
-    public_address, public_port = parse_stun_response(data, transaction_id)
-
-    sock.close()
-
-    return public_address, public_port
+    return None, None
 
 
 def generate_transaction_id():
@@ -62,66 +66,34 @@ def generate_ice_controlled_attribute():
     return struct.pack('!II', random.randint(0, 0xFFFFFFFF), random.randint(0, 0xFFFFFFFF))
 
 
-def build_stun_request(transaction_id):
+def build_stun_request_basic(transaction_id):
     # 构建 STUN 请求消息
     msg = struct.pack('!HH', 0x0001, 0)
-    magic_cookie = 0x2112A442
+    magic_cookie = STUNAttr.MAGIC_COOKIE
     msg += struct.pack('!I', magic_cookie)
     msg += transaction_id
     return msg
 
 
-def parse_stun_response(data, expected_transaction_id):
-    # 解析 STUN 响应消息
-    if len(data) >= 20 and data[0:2] == b'\x01\x01':
-        magic_cookie = struct.unpack('!I', data[4:8])[0]
-        if magic_cookie != 0x2112A442:
-            print("Error: STUN response received, but magic_cookie does not match.")
-            return None, None
-
-        #  校验Transaction ID
-        transaction_id = data[8:20]
-        if transaction_id != expected_transaction_id:
-            print("Error: Received STUN response with unexpected Transaction ID.")
-            return None, None
-
-        # 循环解析 TLV 结构中的属性
-        pos = 20
-        while pos < len(data):
-            attribute_type, attribute_length = struct.unpack(
-                '!HH', data[pos:pos+4])
-            attribute_value = data[pos+4:pos+attribute_length+4]
-
-            if attribute_type == 0x0001:  # MAPPED-ADDRESS attribute
-                address_family = struct.unpack('!H', attribute_value[:2])[0]
-                if address_family == 0x0001:  # IPv4
-                    public_port = struct.unpack('!H', attribute_value[2:4])[0]
-                    public_address = socket.inet_ntoa(attribute_value[4:8])
-                    return public_address, public_port
-            pos += attribute_length + 4  # Move to the next attribute
-
-    return None, None
-
-
-def build_stun_request_v2(transaction_id, user_name: str, password: str) -> bytes:
+def build_stun_request(transaction_id, user_name: str, password: str, is_fingerprint:bool=True) -> bytes:
     msg = bytearray()
 
     # 添加 STUN 类型和长度字段
     msg.extend(struct.pack('!HH', 0x0001, 0))
 
     # 添加 Magic Cookie
-    magic_cookie = 0x2112A442
+    magic_cookie = STUNAttr.MAGIC_COOKIE
     msg.extend(struct.pack('!I', magic_cookie))
 
     # 添加 Transaction ID
     msg.extend(transaction_id)
 
-    # 添加 PRIORITY
-    msg.extend(struct.pack('!HHI', STUNAttr.PRIORITY, 4, 1))
+    # PRIORITY, some stun server doesn't support this
+    # msg.extend(struct.pack('!HHI', STUNAttr.PRIORITY, 4, 1))
 
-    # 添加 ICE_CONTROLLED
-    msg.extend(struct.pack('!HH', STUNAttr.ICE_CONTROLLED, 8))
-    msg.extend(generate_ice_controlled_attribute())
+    # ICE_CONTROLLED, not basic STUN ATTR
+    # msg.extend(struct.pack('!HH', STUNAttr.ICE_CONTROLLED, 8))
+    # msg.extend(generate_ice_controlled_attribute())
 
     if user_name and password:
         user_name_bytes = user_name.encode('utf-8')
@@ -139,18 +111,75 @@ def build_stun_request_v2(transaction_id, user_name: str, password: str) -> byte
         msg.extend(struct.pack('!HH', STUNAttr.MESSAGE_INTEGRITY, 20))
         msg.extend(integrity)
 
-    # 后面要计算FINGER_PRINT，所以【必须】提前计算长度
-    struct.pack_into('!H', msg, 2, len(msg) - LENGTH.STUN_HEAD + LENGTH.FINGER_PRINT)
+    # 增加FINGERPRINT
+    if is_fingerprint:
+        # 计算FINGER_PRINT时，[必须]提前计算长度，长度需包括FINGER_PRINT。
+        struct.pack_into('!H', msg, 2, len(msg) - LENGTH.STUN_HEAD + LENGTH.FINGERPRINT)
 
-    # 添加 FINGER_PRINT
-    crc32_value = zlib.crc32(bytes(msg)) & 0xFFFFFFFF
-    crc32_xor = crc32_value ^ 0x5354554e
-    msg.extend(struct.pack('!HHI', STUNAttr.FINGER_PRINT, 4, crc32_xor))
+        # 添加 FINGER_PRINT
+        crc32_value = zlib.crc32(bytes(msg)) & 0xFFFFFFFF
+        crc32_xor = crc32_value ^ 0x5354554e # 0x5354554e is defined in RFC 5389
+        msg.extend(struct.pack('!HHI', STUNAttr.FINGER_PRINT, 4, crc32_xor))
+    else:
+        struct.pack_into('!H', msg, 2, len(msg) - LENGTH.STUN_HEAD)
 
     return bytes(msg)
 
+def parse_stun_response(data, expected_transaction_id):
+    # 解析 STUN 响应消息
+    if len(data) >= 20 and data[0:2] == b'\x01\x01':
+        magic_cookie = struct.unpack('!I', data[4:8])[0]
+        if magic_cookie != STUNAttr.MAGIC_COOKIE:
+            print("Error: STUN response received, but magic_cookie does not match.")
+            return None, None
+
+        #  校验Transaction ID
+        transaction_id = data[8:20]
+        if transaction_id != expected_transaction_id:
+            print("Error: Received STUN response with unexpected Transaction ID.")
+            return None, None
+
+        # 循环解析 TLV 结构中的属性
+        pos = 20
+        while pos < len(data):
+            attribute_type, attribute_length = struct.unpack(
+                '!HH', data[pos:pos+4])
+            attribute_value = data[pos+4:pos+attribute_length+4]
+
+            if attribute_type == STUNAttr.MAPPED_ADDRESS:  
+                address_family = struct.unpack('!H', attribute_value[:2])[0]
+                if address_family == 0x0001:  # IPv4
+                    public_port = struct.unpack('!H', attribute_value[2:4])[0]
+                    public_address = socket.inet_ntoa(attribute_value[4:8])
+                    return public_address, public_port
+            elif attribute_type == STUNAttr.XOR_MAPPED_ADDRESS:
+                address_family = struct.unpack('!H', attribute_value[:2])[0]
+                if address_family == 0x0001:  # IPv4
+                    # XOR 操作,恢复端口
+                    xor_public_port = struct.unpack('!H', attribute_value[2:4])[0]
+                    public_port = xor_public_port ^ STUNAttr.MAGIC_COOKIE >> 16  
+                    
+                    # XOR 操作,恢复 IP 地址
+                    xor_ip_bytes = attribute_value[4:8]
+                    public_address_bytes = bytes(
+                        [xor_ip_bytes[i] ^ ((STUNAttr.MAGIC_COOKIE >> (8 * (3-i))) & 0xFF) for i in range(4)]
+                    )
+                    public_address = socket.inet_ntoa(public_address_bytes)
+                    
+                    return public_address, public_port
+            pos += attribute_length + 4  # Move to the next attribute
+
+    return None, None
+
 
 if __name__ == '__main__':
-    public_address, public_port = get_stun_ip_port(stun_host='stun.freeswitch.org')
-    if public_port and public_address:
-        print("Your Public Address:", public_address)
+    get_result = False
+    for host in TESTED_STUN_SERVERS:
+        public_address, public_port = get_stun_ip_port(stun_host=host)
+        if public_port and public_address:
+            print(f"Your Public Address:{public_address}")
+            get_result = True
+            break 
+
+    if not get_result:
+        print("Can't get your public address")
