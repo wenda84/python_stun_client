@@ -18,35 +18,40 @@ class STUNAttr:
 
 
 # 其他可用的公网STUN服务器stun.syncthing.net
-def get_stun_ip_info(stun_host='stun.miwifi.com', stun_port=3478, user_name='aaaa:bbbb', password='')->tuple[str, int]|tuple[None, None]:
-    # 创建 UDP 套接字
+def get_stun_ip_port(stun_host, stun_port=3478, user_name='aaaa:bbbb', password='', version=2) -> tuple[str, int] | tuple[None, None]:
+    '''
+    stun_host: STUN服务器地址，测试过的stun服务器有：
+        stun.freeswitch.org V1
+        stun.graftlab.com V1
+        stun.miwifi.com V1/V2
+    '''
+    
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2)  # 设置超时时间
+    sock.settimeout(2)
 
-    # 构建 STUN 请求消息
     transaction_id = generate_transaction_id()
-    msg = build_stun_request_v2(transaction_id, user_name, password)
+
+    if version == 2:
+        msg = build_stun_request_v2(transaction_id, user_name, password)
+    else:
+        msg = build_stun_request(transaction_id)
 
     try:
-        # 发送 STUN 请求消息到指定的 STUN 服务器
         sock.sendto(msg, (stun_host, stun_port))
 
-        # 接收 STUN 响应消息
         data, addr = sock.recvfrom(1024)
     except socket.timeout:
+        print("Error: receive STUN response time out.")
         return None, None
 
-    # 解析 STUN 响应消息
     public_address, public_port = parse_stun_response(data, transaction_id)
 
-    # 关闭套接字
     sock.close()
 
     return public_address, public_port
 
 
 def generate_transaction_id():
-    # 生成随机的 Transaction ID
     return struct.pack('!III', random.randint(0, 0xFFFFFFFF), random.randint(0, 0xFFFFFFFF), random.randint(0, 0xFFFFFFFF))
 
 
@@ -74,7 +79,7 @@ def parse_stun_response(data, expected_transaction_id):
         #  校验Transaction ID
         transaction_id = data[8:20]
         if transaction_id != expected_transaction_id:
-            # print("Error: Received STUN response with unexpected Transaction ID.")
+            print("Error: Received STUN response with unexpected Transaction ID.")
             return None, None
 
         # 循环解析 TLV 结构中的属性
@@ -96,7 +101,6 @@ def parse_stun_response(data, expected_transaction_id):
 
 
 def build_stun_request_v2(transaction_id, user_name: str, password: str) -> bytes:
-    # 构建 STUN 请求消息
     msg = bytearray()
 
     # 添加 STUN 类型和长度字段
@@ -128,8 +132,7 @@ def build_stun_request_v2(transaction_id, user_name: str, password: str) -> byte
     # 计算 MESSAGE-INTEGRITY
     hmac_key = hashlib.md5(user_name_bytes).digest()
     msg_without_integrity = bytes(msg)
-    integrity = hmac.new(hmac_key, msg_without_integrity,
-                         hashlib.sha1).digest()
+    integrity = hmac.new(hmac_key, msg_without_integrity, hashlib.sha1).digest()
     msg.extend(struct.pack('!HH', STUNAttr.MESSAGE_INTEGRITY, 20))
     msg.extend(integrity)
 
@@ -148,6 +151,6 @@ def build_stun_request_v2(transaction_id, user_name: str, password: str) -> byte
 
 
 if __name__ == '__main__':
-    public_address, public_port = get_stun_ip_info()
+    public_address, public_port = get_stun_ip_port(stun_host='stun.graftlab.com', version=1)
     if public_port and public_address:
-        print("Public Address:", public_address)
+        print("Your Public Address:", public_address)
