@@ -1,2 +1,2 @@
 # pstc
-A STUN Client follow RFC 5389.
+A python STUN Client follow RFC 5389.
