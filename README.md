@@ -1,5 +1,5 @@
 # python_stun_client
-A very simple python STUN Client follow RFC 5389.  o
+A very simple python STUN Client follow RFC 5389.  
 No other requirements.
 
 
