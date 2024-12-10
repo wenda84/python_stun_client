@@ -16,16 +16,19 @@ class STUNAttr:
     FINGER_PRINT = 0x8028
     ICE_CONTROLLED = 0x8029
 
+class LENGTH:
+    STUN_HEAD = 20
+    FINGER_PRINT = 8
 
 # 其他可用的公网STUN服务器stun.syncthing.net
-def get_stun_ip_port(stun_host, stun_port=3478, user_name='aaaa:bbbb', password='', version=2) -> tuple[str, int] | tuple[None, None]:
+def get_stun_ip_port(stun_host, stun_port=3478, user_name=None, password=None, version=2) -> tuple[str, int] | tuple[None, None]:
     '''
     stun_host: STUN服务器地址，测试过的stun服务器有：
-        stun.freeswitch.org V1
-        stun.graftlab.com V1
-        stun.miwifi.com V1/V2
+        stun.freeswitch.org 
+        stun.graftlab.com 
+        stun.miwifi.com 
     '''
-    
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(2)
 
@@ -100,7 +103,12 @@ def parse_stun_response(data, expected_transaction_id):
     return None, None
 
 
-def build_stun_request_v2(transaction_id, user_name: str, password: str) -> bytes:
+import struct
+import hashlib
+import hmac
+import zlib
+
+def build_stun_request_v2(transaction_id, user_name: str='aaa:bbb', password: str='ccc:ddd') -> bytes:
     msg = bytearray()
 
     # 添加 STUN 类型和长度字段
@@ -113,44 +121,45 @@ def build_stun_request_v2(transaction_id, user_name: str, password: str) -> byte
     # 添加 Transaction ID
     msg.extend(transaction_id)
 
-    # 添加用户名
-    user_name_bytes = user_name.encode('utf-8')
-    msg.extend(struct.pack('!HH', STUNAttr.USERNAME, len(user_name_bytes)))
-    msg.extend(user_name_bytes)
-    # 补充字节以实现四字节对齐
-    padding_length = 4 - (len(user_name_bytes) % 4)
-    if padding_length != 4:
-        msg.extend(b'\x00' * padding_length)
+    if user_name and password:
+        user_name_bytes = user_name.encode('utf-8')
+        msg.extend(struct.pack('!HH', STUNAttr.USERNAME, len(user_name_bytes)))
+        msg.extend(user_name_bytes)
+        # 补充字节以实现四字节对齐
+        padding_length = 4 - (len(user_name_bytes) % 4)
+        if padding_length != 4:
+            msg.extend(b'\x00' * padding_length)
 
-    # 添加 PRIORITY
-    msg.extend(struct.pack('!HHI', STUNAttr.PRIORITY, 4, 1))
+        # 添加 PRIORITY
+        msg.extend(struct.pack('!HHI', STUNAttr.PRIORITY, 4, 1))
 
-    # 添加 ICE_CONTROLLED
-    msg.extend(struct.pack('!HH', STUNAttr.ICE_CONTROLLED, 8))
-    msg.extend(generate_ice_controlled_attribute())
+        # 添加 ICE_CONTROLLED
+        msg.extend(struct.pack('!HH', STUNAttr.ICE_CONTROLLED, 8))
+        msg.extend(generate_ice_controlled_attribute())
 
-    # 计算 MESSAGE-INTEGRITY
-    hmac_key = hashlib.md5(user_name_bytes).digest()
-    msg_without_integrity = bytes(msg)
-    integrity = hmac.new(hmac_key, msg_without_integrity, hashlib.sha1).digest()
-    msg.extend(struct.pack('!HH', STUNAttr.MESSAGE_INTEGRITY, 20))
-    msg.extend(integrity)
+        # 计算 MESSAGE-INTEGRITY（包括密码）
+        user_name_password_bytes = user_name_bytes + password.encode('utf-8')
+        hmac_key = hashlib.md5(user_name_password_bytes).digest()
+        msg_without_integrity = bytes(msg)  # 这里消息还不包括 MESSAGE-INTEGRITY
+        integrity = hmac.new(hmac_key, msg_without_integrity, hashlib.sha1).digest()
+        msg.extend(struct.pack('!HH', STUNAttr.MESSAGE_INTEGRITY, 20))
+        msg.extend(integrity)
 
-    # 添加 FINGERPRINT
-    fingerprint_start = len(msg)
-    msg.extend(struct.pack('!HHI', STUNAttr.FINGER_PRINT, 4, 0))
-    # 计算 CRC32 校验和
-    crc32_value = zlib.crc32(password.encode('utf-8')) & 0xFFFFFFFF
-    # 更新 FINGERPRINT 字段的值
-    struct.pack_into('!I', msg, fingerprint_start + 4, crc32_value)
+    # 后面要计算FINGER_PRINT，所以【必须】提前计算长度
+    struct.pack_into('!H', msg, 2, len(msg) - LENGTH.STUN_HEAD + LENGTH.FINGER_PRINT)
 
-    # 更新消息的长度字段
-    struct.pack_into('!H', msg, 2, len(msg) - 20)
+    # 计算 CRC32，与 0x5354554e 进行 XOR 操作
+    crc32_value = zlib.crc32(bytes(msg)) & 0xFFFFFFFF
+    crc32_xor = crc32_value ^ 0x5354554e
+
+    # 更新 FINGERPRINT 属性
+    msg.extend(struct.pack('!HHI', STUNAttr.FINGER_PRINT, 4, crc32_xor))
+
 
     return bytes(msg)
 
 
 if __name__ == '__main__':
-    public_address, public_port = get_stun_ip_port(stun_host='stun.graftlab.com', version=1)
+    public_address, public_port = get_stun_ip_port(stun_host='stun.freeswitch.org')
     if public_port and public_address:
         print("Your Public Address:", public_address)
