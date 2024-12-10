@@ -103,12 +103,7 @@ def parse_stun_response(data, expected_transaction_id):
     return None, None
 
 
-import struct
-import hashlib
-import hmac
-import zlib
-
-def build_stun_request_v2(transaction_id, user_name: str='aaa:bbb', password: str='ccc:ddd') -> bytes:
+def build_stun_request_v2(transaction_id, user_name: str, password: str) -> bytes:
     msg = bytearray()
 
     # 添加 STUN 类型和长度字段
@@ -121,6 +116,13 @@ def build_stun_request_v2(transaction_id, user_name: str='aaa:bbb', password: st
     # 添加 Transaction ID
     msg.extend(transaction_id)
 
+    # 添加 PRIORITY
+    msg.extend(struct.pack('!HHI', STUNAttr.PRIORITY, 4, 1))
+
+    # 添加 ICE_CONTROLLED
+    msg.extend(struct.pack('!HH', STUNAttr.ICE_CONTROLLED, 8))
+    msg.extend(generate_ice_controlled_attribute())
+
     if user_name and password:
         user_name_bytes = user_name.encode('utf-8')
         msg.extend(struct.pack('!HH', STUNAttr.USERNAME, len(user_name_bytes)))
@@ -130,31 +132,20 @@ def build_stun_request_v2(transaction_id, user_name: str='aaa:bbb', password: st
         if padding_length != 4:
             msg.extend(b'\x00' * padding_length)
 
-        # 添加 PRIORITY
-        msg.extend(struct.pack('!HHI', STUNAttr.PRIORITY, 4, 1))
-
-        # 添加 ICE_CONTROLLED
-        msg.extend(struct.pack('!HH', STUNAttr.ICE_CONTROLLED, 8))
-        msg.extend(generate_ice_controlled_attribute())
-
         # 计算 MESSAGE-INTEGRITY（包括密码）
         user_name_password_bytes = user_name_bytes + password.encode('utf-8')
         hmac_key = hashlib.md5(user_name_password_bytes).digest()
-        msg_without_integrity = bytes(msg)  # 这里消息还不包括 MESSAGE-INTEGRITY
-        integrity = hmac.new(hmac_key, msg_without_integrity, hashlib.sha1).digest()
+        integrity = hmac.new(hmac_key, msg, hashlib.sha1).digest()
         msg.extend(struct.pack('!HH', STUNAttr.MESSAGE_INTEGRITY, 20))
         msg.extend(integrity)
 
     # 后面要计算FINGER_PRINT，所以【必须】提前计算长度
     struct.pack_into('!H', msg, 2, len(msg) - LENGTH.STUN_HEAD + LENGTH.FINGER_PRINT)
 
-    # 计算 CRC32，与 0x5354554e 进行 XOR 操作
+    # 添加 FINGER_PRINT
     crc32_value = zlib.crc32(bytes(msg)) & 0xFFFFFFFF
     crc32_xor = crc32_value ^ 0x5354554e
-
-    # 更新 FINGERPRINT 属性
     msg.extend(struct.pack('!HHI', STUNAttr.FINGER_PRINT, 4, crc32_xor))
-
 
     return bytes(msg)
 
