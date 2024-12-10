@@ -1,4 +1,4 @@
-# pstc
+# python_stun_client
 A python STUN Client follow RFC 5389.
 
 ## usage
