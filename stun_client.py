@@ -116,7 +116,6 @@ def build_stun_request(transaction_id, user_name: str, password: str, is_fingerp
         # 计算FINGER_PRINT时，[必须]提前计算长度，长度需包括FINGER_PRINT。
         struct.pack_into('!H', msg, 2, len(msg) - LENGTH.STUN_HEAD + LENGTH.FINGERPRINT)
 
-        # 添加 FINGER_PRINT
         crc32_value = zlib.crc32(bytes(msg)) & 0xFFFFFFFF
         crc32_xor = crc32_value ^ 0x5354554e # 0x5354554e is defined in RFC 5389
         msg.extend(struct.pack('!HHI', STUNAttr.FINGER_PRINT, 4, crc32_xor))
