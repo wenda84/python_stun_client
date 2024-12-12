@@ -7,8 +7,12 @@ import hashlib
 import zlib
 
 
-# 在这里定义STUN 属性的常量
-class STUNAttr:
+class STUN_MSG_TYPE:
+    BINDING_REQ = 0x0001
+    BINDING_SUCC_RSP = 0x0101
+
+
+class STUN_ATTR_TYPE:
     MAPPED_ADDRESS = 0x0001
     USERNAME = 0x0006
     MESSAGE_INTEGRITY = 0x0008
@@ -21,7 +25,11 @@ class STUNAttr:
 
 class LENGTH:
     STUN_HEAD = 20
-    FINGERPRINT = 8
+    FINGERPRINT = 8  # total length of TLV
+
+
+class STATIC_VALUE:
+    STUN_MAGIC_COOKIE = 0x2112A442
 
 
 # 测试过的STUN服务器
@@ -71,7 +79,7 @@ def generate_ice_controlled_attribute():
 def build_stun_request_basic(transaction_id):
     # 构建 STUN 请求消息
     msg = struct.pack('!HH', 0x0001, 0)
-    magic_cookie = STUNAttr.MAGIC_COOKIE
+    magic_cookie = STATIC_VALUE.STUN_MAGIC_COOKIE
     msg += struct.pack('!I', magic_cookie)
     msg += transaction_id
     return msg
@@ -80,11 +88,11 @@ def build_stun_request_basic(transaction_id):
 def build_stun_request(transaction_id, user_name: str, password: str, is_fingerprint: bool = True) -> bytes:
     msg = bytearray()
 
-    # 添加 STUN 类型和长度字段
-    msg.extend(struct.pack('!HH', 0x0001, 0))
+    # 添加 STUN 类型和长度字段(长度先置0，最后再计算)
+    msg.extend(struct.pack('!HH', STUN_MSG_TYPE.BINDING_REQ, 0))
 
     # 添加 Magic Cookie
-    magic_cookie = STUNAttr.MAGIC_COOKIE
+    magic_cookie = STATIC_VALUE.STUN_MAGIC_COOKIE
     msg.extend(struct.pack('!I', magic_cookie))
 
     # 添加 Transaction ID
@@ -99,7 +107,7 @@ def build_stun_request(transaction_id, user_name: str, password: str, is_fingerp
 
     if user_name and password:
         user_name_bytes = user_name.encode('utf-8')
-        msg.extend(struct.pack('!HH', STUNAttr.USERNAME, len(user_name_bytes)))
+        msg.extend(struct.pack('!HH', STUN_ATTR_TYPE.USERNAME, len(user_name_bytes)))
         msg.extend(user_name_bytes)
         # 补充字节以实现四字节对齐
         padding_length = 4 - (len(user_name_bytes) % 4)
@@ -110,7 +118,7 @@ def build_stun_request(transaction_id, user_name: str, password: str, is_fingerp
         user_name_password_bytes = user_name_bytes + password.encode('utf-8')
         hmac_key = hashlib.md5(user_name_password_bytes).digest()
         integrity = hmac.new(hmac_key, msg, hashlib.sha1).digest()
-        msg.extend(struct.pack('!HH', STUNAttr.MESSAGE_INTEGRITY, 20))
+        msg.extend(struct.pack('!HH', STUN_ATTR_TYPE.MESSAGE_INTEGRITY, 20))
         msg.extend(integrity)
 
     # 增加FINGERPRINT
@@ -120,7 +128,7 @@ def build_stun_request(transaction_id, user_name: str, password: str, is_fingerp
 
         crc32_value = zlib.crc32(bytes(msg)) & 0xFFFFFFFF
         crc32_xor = crc32_value ^ 0x5354554e  # 0x5354554e is defined in RFC 5389
-        msg.extend(struct.pack('!HHI', STUNAttr.FINGER_PRINT, 4, crc32_xor))
+        msg.extend(struct.pack('!HHI', STUN_ATTR_TYPE.FINGER_PRINT, 4, crc32_xor))
     else:
         # 计算长度
         struct.pack_into('!H', msg, 2, len(msg) - LENGTH.STUN_HEAD)
@@ -128,21 +136,20 @@ def build_stun_request(transaction_id, user_name: str, password: str, is_fingerp
     return bytes(msg)
 
 
-def parse_stun_response(data, expected_transaction_id):
+def parse_stun_response(data:bytes, expected_transaction_id):
     if len(data) < 20:
         print("Error: STUN response is too short.")
         return None, None
 
-    if data[0:2] != b'\x01\x01':
+    if  struct.unpack('!H', data[0:2])[0] != STUN_MSG_TYPE.BINDING_SUCC_RSP:
         print("Error: STUN response received, but message type is not correct.")
         return None, None
 
     magic_cookie = struct.unpack('!I', data[4:8])[0]
-    if magic_cookie != STUNAttr.MAGIC_COOKIE:
+    if magic_cookie != STATIC_VALUE.STUN_MAGIC_COOKIE:
         print("Error: STUN response received, but magic_cookie does not match.")
         return None, None
 
-    #  校验Transaction ID
     transaction_id = data[8:20]
     if transaction_id != expected_transaction_id:
         print("Error: Received STUN response with unexpected Transaction ID.")
@@ -154,23 +161,23 @@ def parse_stun_response(data, expected_transaction_id):
         attribute_type, attribute_length = struct.unpack('!HH', data[pos:pos+4])
         attribute_value = data[pos+4:pos+attribute_length+4]
 
-        if attribute_type == STUNAttr.MAPPED_ADDRESS:
+        if attribute_type == STUN_ATTR_TYPE.MAPPED_ADDRESS:
             address_family = struct.unpack('!H', attribute_value[:2])[0]
             if address_family == 0x0001:  # IPv4
                 public_port = struct.unpack('!H', attribute_value[2:4])[0]
                 public_address = socket.inet_ntoa(attribute_value[4:8])
                 return public_address, public_port
-        elif attribute_type == STUNAttr.XOR_MAPPED_ADDRESS:
+        elif attribute_type == STUN_ATTR_TYPE.XOR_MAPPED_ADDRESS:
             address_family = struct.unpack('!H', attribute_value[:2])[0]
             if address_family == 0x0001:  # IPv4
                 # XOR 操作,恢复端口
                 xor_public_port = struct.unpack('!H', attribute_value[2:4])[0]
-                public_port = xor_public_port ^ STUNAttr.MAGIC_COOKIE >> 16
+                public_port = xor_public_port ^ STATIC_VALUE.STUN_MAGIC_COOKIE >> 16
 
                 # XOR 操作,恢复 IP 地址
                 xor_ip_bytes = attribute_value[4:8]
                 public_address_bytes = bytes(
-                    [xor_ip_bytes[i] ^ ((STUNAttr.MAGIC_COOKIE >> (8 * (3-i))) & 0xFF) for i in range(4)]
+                    [xor_ip_bytes[i] ^ ((STATIC_VALUE.STUN_MAGIC_COOKIE >> (8 * (3-i))) & 0xFF) for i in range(4)]
                 )
                 public_address = socket.inet_ntoa(public_address_bytes)
 
