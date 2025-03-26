@@ -5,6 +5,7 @@ import random
 import hmac
 import hashlib
 import zlib
+from typing import Union, Tuple
 
 
 class STUN_MSG_TYPE:
@@ -36,7 +37,7 @@ class STATIC_VALUE:
 TESTED_STUN_SERVERS = ['stun.freeswitch.org', 'stun.graftlab.com', 'stun.miwifi.com', 'stun.kaseya.com']
 
 
-def get_stun_ip_port(stun_host, stun_port=3478, user_name=None, password=None, version=2) -> tuple[str, int] | tuple[None, None]:
+def get_stun_ip_port(stun_host, stun_port=3478, user_name=None, password=None, version=2) -> Union[Tuple[str, int], Tuple[None, None]]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(3)
 
