@@ -34,7 +34,7 @@ class STATIC_VALUE:
 
 
 # 测试过的STUN服务器
-TESTED_STUN_SERVERS = ['stun.freeswitch.org', 'stun.graftlab.com', 'stun.miwifi.com', 'stun.kaseya.com']
+TESTED_STUN_SERVERS = ['stun.graftlab.com', 'stun.miwifi.com', 'stun.kaseya.com','stun.freeswitch.org']
 
 
 def get_stun_ip_port(stun_host, stun_port=3478, user_name=None, password=None, version=2) -> Union[Tuple[str, int], Tuple[None, None]]:
@@ -60,7 +60,7 @@ def get_stun_ip_port(stun_host, stun_port=3478, user_name=None, password=None, v
 
         return public_address, public_port
     except socket.timeout:
-        print(f"Error: receive STUN response from ({stun_host}) time out.")
+        print(f"Receive STUN response from server({stun_host}) time out.")
     except Exception as e:
         print("Error: ", e)
     finally:
@@ -194,7 +194,7 @@ if __name__ == '__main__':
     for host in TESTED_STUN_SERVERS:
         public_address, public_port = get_stun_ip_port(stun_host=host)
         if public_port and public_address:
-            print(f"Your Public Address:{public_address}, get by {host}")
+            print(f"Your Public Address:{public_address}, get by server: {host}")
             get_result = True
             # break
 
