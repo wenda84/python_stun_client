@@ -60,7 +60,7 @@ def get_stun_ip_port(stun_host, stun_port=3478, user_name=None, password=None, v
 
         return public_address, public_port
     except socket.timeout:
-        print("Error: receive STUN response time out.")
+        print(f"Error: receive STUN response from ({stun_host}) time out.")
     except Exception as e:
         print("Error: ", e)
     finally:
@@ -194,7 +194,7 @@ if __name__ == '__main__':
     for host in TESTED_STUN_SERVERS:
         public_address, public_port = get_stun_ip_port(stun_host=host)
         if public_port and public_address:
-            print(f"Your Public Address:{public_address}")
+            print(f"Your Public Address:{public_address}, get by {host}")
             get_result = True
             break
 
