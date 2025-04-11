@@ -196,7 +196,7 @@ if __name__ == '__main__':
         if public_port and public_address:
             print(f"Your Public Address:{public_address}, get by {host}")
             get_result = True
-            break
+            # break
 
     if not get_result:
         print("Can't get your public address")
